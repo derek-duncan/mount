@@ -5,6 +5,7 @@
 
 var debug = require('debug')('koa-mount');
 var compose = require('koa-compose');
+var co = require('co');
 var assert = require('assert');
 
 /**
@@ -25,45 +26,45 @@ module.exports = mount;
  */
 
 function mount(prefix, app) {
-  if ('string' != typeof prefix) {
+  if ('string' !== typeof prefix) {
     app = prefix;
     prefix = '/';
   }
 
-  assert('/' == prefix[0], 'mount path must begin with "/"');
+  assert('/' === prefix[0], 'mount path must begin with "/"');
 
   // compose
-  var downstream = app.middleware
+  var appOrMiddleware = app.middleware
     ? compose(app.middleware)
     : app;
 
   // don't need to do mounting here
-  if ('/' == prefix) return downstream;
+  if ('/' === prefix) return appOrMiddleware;
 
-  var trailingSlash = '/' == prefix.slice(-1);
+  var trailingSlash = '/' === prefix.slice(-1);
 
   var name = app.name || 'unnamed';
   debug('mount %s %s', prefix, name);
 
-  return function *(upstream){
-    var prev = this.path;
+  return co.wrap(function *(ctx, next){
+    var prev = ctx.path;
     var newPath = match(prev);
     debug('mount %s %s -> %s', prefix, name, newPath);
-    if (!newPath) return yield* upstream;
+    if (!newPath) return yield next();
 
-    this.mountPath = prefix;
-    this.path = newPath;
-    debug('enter %s -> %s', prev, this.path);
+    ctx.mountPath = prefix;
+    ctx.path = newPath;
+    debug('enter %s -> %s', prev, ctx.path);
 
-    yield* downstream.call(this, function *(){
-      this.path = prev;
-      yield* upstream;
-      this.path = newPath;
-    }.call(this));
+    yield co(appOrMiddleware(ctx, function *() {
+      ctx.path = prev;
+      yield next();
+      ctx.path = newPath;
+    }));
 
-    debug('leave %s -> %s', prev, this.path);
-    this.path = prev;
-  }
+    debug('leave %s -> %s', prev, ctx.path);
+    ctx.path = prev;
+  });
 
   /**
    * Check if `prefix` satisfies a `path`.
@@ -82,13 +83,14 @@ function mount(prefix, app) {
 
   function match(path) {
     // does not match prefix at all
-    if (0 != path.indexOf(prefix)) return false;
+    if (0 !== path.indexOf(prefix)) return false;
 
     var newPath = path.replace(prefix, '') || '/';
     if (trailingSlash) return newPath;
 
     // `/mount` does not match `/mountlkjalskjdf`
-    if ('/' != newPath[0]) return false;
+    if ('/' !== newPath[0]) return false;
     return newPath;
   }
 }
+
